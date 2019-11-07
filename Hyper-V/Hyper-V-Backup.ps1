@@ -392,7 +392,7 @@ If ($Vms.count -ne 0)
                 Else
                 {
                     ## Remove previous compressed backups that are older than the configured number of days.
-                    Get-ChildItem -Path "$Backup\$Vm-*-*-*-*-*-*.zip" | Where-Object CreationTime –lt (Get-Date).AddDays(-$History) | Remove-Item -Force
+                    Get-ChildItem -Path $Backup -Filter "$Vm*-*-*-*-*-*-*.zip" | Where-Object CreationTime –lt (Get-Date).AddDays(-$History) | Remove-Item -Force
 
                     ## For logging.
                     If ($LogPath)
