@@ -1,12 +1,11 @@
-﻿function Remove-AzrVirtualMachine
-{
+function Remove-AzrVirtualMachine {
 	<#
 	.SYNOPSIS
 		This function is used to remove any Azure VMs as well as any attached disks. By default, this function creates a job
 		due to the time it takes to remove an Azure VM.
 		
 	.EXAMPLE
-		PS> Get-AzureRmVm -Name 'BAPP07GEN22' | Remove-AzrVirtualMachine -Credential (Get-Credential)
+		PS> Get-AzVm -Name 'BAPP07GEN22' | Remove-AzrVirtualMachine
 	
 		This example removes the Azure VM BAPP07GEN22 as well as any disks attached to it.
 		
@@ -20,19 +19,19 @@
 		If you'd rather wait for the Azure VM to be removed before returning control to the console, use this switch parameter.
 		If not, it will create a job and return a PSJob back.
 	#>
-	[CmdletBinding(SupportsShouldProcess,ConfirmImpact = 'High')]
+	[CmdletBinding(SupportsShouldProcess, ConfirmImpact = 'High')]
 	param
 	(
-		[Parameter(Mandatory,ValueFromPipelineByPropertyName)]
+		[Parameter(Mandatory, ValueFromPipelineByPropertyName)]
 		[ValidateNotNullOrEmpty()]
 		[Alias('Name')]
 		[string]$VMName,
 		
-		[Parameter(Mandatory,ValueFromPipelineByPropertyName)]
+		[Parameter(Mandatory, ValueFromPipelineByPropertyName)]
 		[ValidateNotNullOrEmpty()]
 		[string]$ResourceGroupName,
 
-		[Parameter(Mandatory)]
+		[Parameter()]
 		[pscredential]$Credential,
 
 		[Parameter()]
@@ -41,114 +40,104 @@
 		
 	)
 	process {
-		try
-		{
-			$scriptBlock = {
-				param ($VMName,
-						$ResourceGroupName)
-					$commonParams = @{
-					'Name' = $VMName;
-					'ResourceGroupName' = $ResourceGroupName
-				}
-				$vm = Get-AzureRmVm @commonParams
+		$scriptBlock = {
+			param ($VMName,
+				$ResourceGroupName)
+			$commonParams = @{
+				'Name'              = $VMName;
+				'ResourceGroupName' = $ResourceGroupName
+			}
+			$vm = Get-AzVm @commonParams
 				
+			#region Remove the boot diagnostics disk
+			if ($vm.DiagnosticsProfile.bootDiagnostics) {
+				Write-Verbose -Message 'Removing boot diagnostics storage container...'
+				$diagSa = [regex]::match($vm.DiagnosticsProfile.bootDiagnostics.storageUri, '^http[s]?://(.+?)\.').groups[1].value
+				if ($vm.Name.Length -gt 9) {
+					$i = 9
+				} else {
+					$i = $vm.Name.Length - 1
+				}
+
 				#region Get the VM ID
 				$azResourceParams = @{
-					'ResourceName' = $VMName
-					'ResourceType' = 'Microsoft.Compute/virtualMachines'
+					'ResourceName'      = $VMName
+					'ResourceType'      = 'Microsoft.Compute/virtualMachines'
 					'ResourceGroupName' = $ResourceGroupName
 				}
-				$vmResource = Get-AzureRmResource @azResourceParams
+				$vmResource = Get-AzResource @azResourceParams
 				$vmId = $vmResource.Properties.VmId
 				#endregion
-				
-				#region Remove the boot diagnostics disk
-				if ($vm.DiagnosticsProfile.bootDiagnostics)
-				{
-					Write-Verbose -Message 'Removing boot diagnostics storage container...'
-					$diagSa = [regex]::match($vm.DiagnosticsProfile.bootDiagnostics.storageUri, '^http[s]?://(.+?)\.').groups[1].value
-					if ($vm.Name.Length -gt 9) {
-						$i = 9
-					} else {
-						$i = $vm.Name.Length - 1
-					}
 
-					$diagContainerName = ('bootdiagnostics-{0}-{1}' -f $vm.Name.ToLower().Substring(0, $i), $vmId)
-					$diagSaRg = (Get-AzureRmStorageAccount | where { $_.StorageAccountName -eq $diagSa }).ResourceGroupName
-					$saParams = @{
-						'ResourceGroupName' = $diagSaRg
-						'Name' = $diagSa
-					}
-					
-					Get-AzureRmStorageAccount @saParams | Get-AzureStorageContainer | where { $_.Name-eq $diagContainerName } | Remove-AzureStorageContainer -Force
+				$diagContainerName = ('bootdiagnostics-{0}-{1}' -f $vm.Name.ToLower().Substring(0, $i), $vmId)
+				$diagSaRg = (Get-AzStorageAccount | where { $_.StorageAccountName -eq $diagSa }).ResourceGroupName
+				$saParams = @{
+					'ResourceGroupName' = $diagSaRg
+					'Name'              = $diagSa
 				}
-				#endregion
+					
+				Get-AzStorageAccount @saParams | Get-AzStorageContainer | where { $_.Name-eq $diagContainerName } | Remove-AzStorageContainer -Force
+			}
+			#endregion
 				
-				Write-Verbose -Message 'Removing the Azure VM...'
-				$null = $vm | Remove-AzureRmVM -Force
-				Write-Verbose -Message 'Removing the Azure network interface...'
-				foreach($nicUri in $vm.NetworkInterfaceIDs)
-				{
-					$nic = Get-AzureRmNetworkInterface -ResourceGroupName $vm.ResourceGroupName -Name $nicUri.Split('/')[-1]
-					Remove-AzureRmNetworkInterface -Name $nic.Name -ResourceGroupName $vm.ResourceGroupName -Force
-					foreach($ipConfig in $nic.IpConfigurations)
-					{
-						if($ipConfig.PublicIpAddress -ne $null)
-					        {
-							Write-Verbose -Message 'Removing the Public IP Address...'
-							Remove-AzureRmPublicIpAddress -ResourceGroupName $vm.ResourceGroupName -Name $ipConfig.PublicIpAddress.Id.Split('/')[-1] -Force
-				             	} 
-				 	}
-				} 
+			Write-Verbose -Message 'Removing the Azure VM...'
+			$null = $vm | Remove-AzVM -Force
+			Write-Verbose -Message 'Removing the Azure network interface...'
+			foreach($nicUri in $vm.NetworkProfile.NetworkInterfaces.Id) {
+				$nic = Get-AzNetworkInterface -ResourceGroupName $vm.ResourceGroupName -Name $nicUri.Split('/')[-1]
+				Remove-AzNetworkInterface -Name $nic.Name -ResourceGroupName $vm.ResourceGroupName -Force
+				foreach($ipConfig in $nic.IpConfigurations) {
+					if($ipConfig.PublicIpAddress -ne $null) {
+						Write-Verbose -Message 'Removing the Public IP Address...'
+						Remove-AzPublicIpAddress -ResourceGroupName $vm.ResourceGroupName -Name $ipConfig.PublicIpAddress.Id.Split('/')[-1] -Force
+					} 
+				}
+			} 
 
 				
-				## Remove the OS disk
-				Write-Verbose -Message 'Removing OS disk...'
-				$osDiskUri = $vm.StorageProfile.OSDisk.Vhd.Uri
-				$osDiskContainerName = $osDiskUri.Split('/')[-2]
-				
+			## Remove the OS disk
+			Write-Verbose -Message 'Removing OS disk...'
+			if ('Uri' -in $vm.StorageProfile.OSDisk.Vhd) {
+				## Not managed
+				$osDiskId = $vm.StorageProfile.OSDisk.Vhd.Uri
+				$osDiskContainerName = $osDiskId.Split('/')[-2]
+
 				## TODO: Does not account for resouce group 
-				$osDiskStorageAcct = Get-AzureRmStorageAccount | where { $_.StorageAccountName -eq $osDiskUri.Split('/')[2].Split('.')[0] }
-				$osDiskStorageAcct | Remove-AzureStorageBlob -Container $osDiskContainerName -Blob $osDiskUri.Split('/')[-1] -ea Ignore
-				
+				$osDiskStorageAcct = Get-AzStorageAccount | where { $_.StorageAccountName -eq $osDiskId.Split('/')[2].Split('.')[0] }
+				$osDiskStorageAcct | Remove-AzStorageBlob -Container $osDiskContainerName -Blob $osDiskId.Split('/')[-1]
+
 				#region Remove the status blob
 				Write-Verbose -Message 'Removing the OS disk status blob...'
-				$osDiskStorageAcct | Get-AzureStorageBlob -Container $osDiskContainerName -Blob "$($vm.Name)*.status" | Remove-AzureStorageBlob
+				$osDiskStorageAcct | Get-AzStorageBlob -Container $osDiskContainerName -Blob "$($vm.Name)*.status" | Remove-AzStorageBlob
 				#endregion
-				
-				## Remove any other attached disks
-				if ($vm.DataDiskNames.Count -gt 0)
-				{
-					Write-Verbose -Message 'Removing data disks...'
-					foreach ($uri in $vm.StorageProfile.DataDisks.Vhd.Uri)
-					{
-						$dataDiskStorageAcct = Get-AzureRmStorageAccount -Name $uri.Split('/')[2].Split('.')[0]
-						$dataDiskStorageAcct | Remove-AzureStorageBlob -Container $uri.Split('/')[-2] -Blob $uri.Split('/')[-1] -ea Ignore
-					}
-				}
+			} else {
+				## managed
+				Get-AzDisk | where { $_.ManagedBy -eq $vm.Id } | Remove-AzDisk -Force
 			}
 			
-			if ($Wait.IsPresent)
-			{
-				& $scriptBlock -VMName $VMName -ResourceGroupName $ResourceGroupName
-			}
-			else
-			{
-				$initScript = {
-					$null = Login-AzureRmAccount -Credential $Credential
+			## Remove any other attached disks
+			if ('DataDiskNames' -in $vm.PSObject.Properties.Name -and @($vm.DataDiskNames).Count -gt 0) {
+				Write-Verbose -Message 'Removing data disks...'
+				foreach ($uri in $vm.StorageProfile.DataDisks.Vhd.Uri) {
+					$dataDiskStorageAcct = Get-AzStorageAccount -Name $uri.Split('/')[2].Split('.')[0]
+					$dataDiskStorageAcct | Remove-AzStorageBlob -Container $uri.Split('/')[-2] -Blob $uri.Split('/')[-1]
 				}
-				$jobParams = @{
-					'ScriptBlock' = $scriptBlock
-					'InitializationScript' = $initScript
-					'ArgumentList' = @($VMName, $ResourceGroupName)
-					'Name' = "Azure VM $VMName Removal"
-				}
-				Start-Job @jobParams 
 			}
 		}
-		catch
-		{
-			Write-Error -Message $_.Exception.Message
+			
+		if ($Wait.IsPresent) {
+			& $scriptBlock -VMName $VMName -ResourceGroupName $ResourceGroupName
+		} else {
+			$initScript = {
+				$null = Login-AzAccount -Credential $Credential
+			}
+			$jobParams = @{
+				'ScriptBlock'          = $scriptBlock
+				'InitializationScript' = $initScript
+				'ArgumentList'         = @($VMName, $ResourceGroupName)
+				'Name'                 = "Azure VM $VMName Removal"
+			}
+			Start-Job @jobParams 
 		}
 	}
 }
