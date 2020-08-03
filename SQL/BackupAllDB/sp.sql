@@ -43,7 +43,7 @@ FETCH NEXT FROM bkup_cursor INTO @dbname
 		
 	WHILE @@FETCH_STATUS = 0  
 	BEGIN  
-		SET @bkup='BACKUP DATABASE '+@dbname+' TO DISK = '''+@path+@dbname+'_'+@date+'.bak'' WITH INIT'  
+		SET @bkup='BACKUP DATABASE ['+@dbname+'] TO DISK = '''+@path+@dbname+'_'+@date+'.bak'' WITH INIT'  
 		PRINT 'Processing '+@dbname+' Backup... **'  
 		EXEC (@bkup)  
 		PRINT 'Backed up to ' + @path+@dbname+'_'+@date+'.bak'  
